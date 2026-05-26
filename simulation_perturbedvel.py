@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import sys
 
-def dynamics(positions, velocities, params, time):
+def dynamics(positions, velocities, params, time, perturbed_vehicle):
     alpha = params['alpha']
     beta = params['beta']
     vmax_desired = params['vmax_desired']
@@ -22,6 +22,9 @@ def dynamics(positions, velocities, params, time):
 
     positions_dot = velocities
     velocities_dot = alpha * (v_optimal - velocities) + beta * delta_v / delta_x ** 2
+
+    if perturbed_vehicle is not None:
+        velocities_dot[perturbed_vehicle] = 0.0
     return positions_dot, velocities_dot
 
 def rk4(init_positions, init_velocities, params, dt, T):
@@ -30,48 +33,87 @@ def rk4(init_positions, init_velocities, params, dt, T):
 
     positions_history = np.zeros((num_steps + 1, num_vehicles))
     velocities_history = np.zeros((num_steps + 1, num_vehicles))
+    perturbed_history = np.full((num_steps + 1,), None, dtype=object)
+    
     positions_history[0] = init_positions
     velocities_history[0] = init_velocities
+    perturbed_history[0] = None
 
     positions_curr = np.array(init_positions)
     velocities_curr = np.array(init_velocities)
 
-    time_curr = 0.0
+    perturbed_vehicle = None
+    perturbed_time_left = 0.0
+    has_perturbed = False
+    cooldown_time_left = 0.0
+
+    safe_gap = 5.0
 
     for i in range(num_steps):
+        time_curr = i * dt
+        
+        # check headway
+        if perturbed_vehicle is not None:
+                leader_id = (perturbed_vehicle - 1) % num_vehicles
+                space_headway = (positions_curr[leader_id] - positions_curr[perturbed_vehicle]) % params['circum']
+                if space_headway < safe_gap:
+                    perturbed_vehicle = None
+                    perturbed_time_left = 0.0
+                    cooldown_time_left = 5.0
+        
+        # decide perturbation
+        if perturbed_time_left <= 0:
+            if perturbed_vehicle is not None:
+                perturbed_vehicle = None
+                cooldown_time_left = 5.0
+            if time_curr >= 5.0 and not has_perturbed and cooldown_time_left <= 0:
+                if np.random.rand() < 0.5:
+                    perturbed_vehicle = np.random.randint(0, num_vehicles)
+                    perturbed_time_left = np.random.uniform(2.0, 5.0)
+                    # has_perturbed = True
+                    print(f'perturbed at time {time_curr:.2f} on vehicle {perturbed_vehicle} for {perturbed_time_left:.2f}s')
+        
+        perturbed_history[i] = perturbed_vehicle
+
         # K1
-        k1_pos_dot, k1_vel_dot = dynamics(positions_curr, velocities_curr, params, time_curr)
+        k1_pos_dot, k1_vel_dot = dynamics(positions_curr, velocities_curr, params, time_curr, perturbed_vehicle)
 
         # K2
         k2_pos_dot, k2_vel_dot = dynamics(
             positions_curr + 0.5 * dt * k1_pos_dot,
             velocities_curr + 0.5 * dt * k1_vel_dot,
-            params, time_curr + 0.5 * dt
+            params, time_curr + 0.5 * dt, perturbed_vehicle
         )
 
         # K3
         k3_pos_dot, k3_vel_dot = dynamics(
             positions_curr + 0.5 * dt * k2_pos_dot,
             velocities_curr + 0.5 * dt * k2_vel_dot,
-            params, time_curr + 0.5 * dt
+            params, time_curr + 0.5 * dt, perturbed_vehicle
         )
 
         # K4
         k4_pos_dot, k4_vel_dot = dynamics(
             positions_curr + dt * k3_pos_dot,
             velocities_curr + dt * k3_vel_dot,
-            params, time_curr + dt
+            params, time_curr + dt, perturbed_vehicle
         )
 
         positions_curr += (dt / 6) * (k1_pos_dot + 2 * k2_pos_dot + 2 * k3_pos_dot + k4_pos_dot)
         positions_curr = positions_curr % params['circum']
         velocities_curr += (dt / 6) * (k1_vel_dot + 2 * k2_vel_dot + 2 * k3_vel_dot + k4_vel_dot)
-        time_curr += dt
+
+        if perturbed_vehicle is not None:
+            perturbed_time_left -= dt
+        if cooldown_time_left > 0:
+            cooldown_time_left -= dt
 
         positions_history[i + 1] = positions_curr
         velocities_history[i + 1] = velocities_curr
 
-    return np.array(positions_history), np.array(velocities_history)
+    perturbed_history[num_steps] = perturbed_vehicle
+
+    return np.array(positions_history), np.array(velocities_history), perturbed_history
 
 # for stability
 def run_simulation(alpha, beta, params):
@@ -103,8 +145,7 @@ def create_animation(positions_history, params, filename='traffic_flow.gif', fra
     initial_angles = (initial_positions / L) * 2 * np.pi
     x_init = R * np.cos(initial_angles)
     y_init = R * np.sin(initial_angles)
-    # The leader is red, the followers are blue
-    colors = ['red'] + ['blue'] * (num_vehicles - 1)
+    colors = ['blue'] * (num_vehicles)
     scatter = ax.scatter(x_init, y_init, c=colors, s=80, zorder=5)
 
     # Add a text box
@@ -120,6 +161,16 @@ def create_animation(positions_history, params, filename='traffic_flow.gif', fra
         x = R * np.cos(angles)
         y = R * np.sin(angles)
         scatter.set_offsets(np.c_[x, y])
+
+        perturbed_id = perturbed_history[frame]
+
+        if perturbed_id is not None:
+            current_colors = ['red' if j == perturbed_id else 'blue' for j in range(num_vehicles)]
+            scatter.set_color(current_colors)
+            scatter.set_linewidths([2.0 if j == perturbed_id else 0.5 for j in range(num_vehicles)])
+        else:
+            scatter.set_color(colors)
+            scatter.set_linewidths(0.5)
 
         current_time = time[frame]
         time_text.set_text(f'time: {current_time:.2f}')
@@ -152,11 +203,12 @@ if __name__ == "__main__":
     num_vehicles = 22
 
     params = {
-            'alpha': 1.0,
-            'beta': 6.0,
+            'alpha': 0.5,
+            'beta': 20.0,
             'vmax_desired': 12.0, # 40 / 3600 * 1000,
             'circum': 230.0,
-            'vehicle_length': 4.0
+            'vehicle_length': 4.0,
+            'perturbed_time': 2.0,
         }
 
     dt = 0.01
@@ -167,7 +219,8 @@ if __name__ == "__main__":
     
     # init leader
     xl0 = 0.0
-    vl0 = 30 / 3600 * 1000 - 1.0
+    vl0 = 30 / 3600 * 1000
+    vl0 = 12*(np.tanh((10.455-4)/2.5-2)+np.tanh(2))/(1+np.tanh(2))
     # vl0 = 1.0
     init_positions[0] = xl0
     init_velocities[0] = vl0
@@ -175,6 +228,7 @@ if __name__ == "__main__":
     # init followers
     init_headway = float(params['circum'] / num_vehicles)
     v0 = 30 / 3600 * 1000
+    v0 = 12*(np.tanh((10.455-4)/2.5-2)+np.tanh(2))/(1+np.tanh(2))
     # v0 = 0.0
 
     print(f"{num_vehicles} vehicles evenly spaced {init_headway:.2f}m apart on ring with c={params['circum']}m")
@@ -187,7 +241,7 @@ if __name__ == "__main__":
 
     # # Test alpha/beta for stability
     # alphas = np.linspace(0.0, 5.0, 10)
-    # betas = np.linspace(0.0, 20.0, 10)
+    # betas = np.linspace(0.0, 200.0, 20)
     # results = np.zeros((len(alphas), len(betas)))
     # for i, a in enumerate(alphas):
     #     for j, b in enumerate(betas):
@@ -201,14 +255,19 @@ if __name__ == "__main__":
     # plt.savefig('stability_map.png')
 
     # simulation
-    positions_history, velocities_history = rk4(init_positions, init_velocities, params, dt, T)
+    positions_history, velocities_history, perturbed_history = rk4(init_positions, init_velocities, params, dt, T)
     time = np.linspace(0, T, len(positions_history))
 
 
     # Plot positions
     plt.figure(figsize=(10, 7))
     for i in range(num_vehicles):
-        plt.plot(time, positions_history[:, i], label=f'v{i}')
+        pos = positions_history[:, i]
+        pos_diff = np.diff(pos)
+        wrap = np.where(pos_diff < -params['circum'] * 0.5)[0]
+        pos_masked = np.array(pos, dtype=float)
+        pos_masked[wrap + 1] = np.nan
+        plt.plot(time, pos_masked, label=f'v{i}')
     plt.title('Positions vs Time')
     plt.xlabel('Time')
     plt.ylabel('Position m')
