@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import sys
+import os
+import tomllib
 
 def dynamics(positions, velocities, params, time, perturbed_vehicle):
     alpha = params['alpha']
@@ -44,6 +46,7 @@ def rk4(init_positions, init_velocities, params, dt, T):
 
     perturbed_vehicle = None
     perturbed_time_left = 0.0
+    perturbation_threshold = 0.005
     has_perturbed = False
     cooldown_time_left = 0.0
 
@@ -57,21 +60,23 @@ def rk4(init_positions, init_velocities, params, dt, T):
                 leader_id = (perturbed_vehicle - 1) % num_vehicles
                 space_headway = (positions_curr[leader_id] - positions_curr[perturbed_vehicle]) % params['circum']
                 if space_headway < safe_gap:
+                    print(f"exiting perturbation early at {time_curr}")
                     perturbed_vehicle = None
                     perturbed_time_left = 0.0
                     cooldown_time_left = 5.0
         
         # decide perturbation
-        if perturbed_time_left <= 0:
-            if perturbed_vehicle is not None:
-                perturbed_vehicle = None
-                cooldown_time_left = 5.0
+        if perturbed_time_left <= 0 and perturbed_vehicle is not None:
+            perturbed_vehicle = None
+            cooldown_time_left = 5.0
+
+        elif perturbed_time_left <= 0 and perturbed_vehicle is None:
             if time_curr >= 5.0 and not has_perturbed and cooldown_time_left <= 0:
-                if np.random.rand() < 0.5:
+                if np.random.rand() < perturbation_threshold:
                     perturbed_vehicle = np.random.randint(0, num_vehicles)
                     perturbed_time_left = np.random.uniform(2.0, 5.0)
                     # has_perturbed = True
-                    print(f'perturbed at time {time_curr:.2f} on vehicle {perturbed_vehicle} for {perturbed_time_left:.2f}s')
+                    print(f'perturbed at time {time_curr:.2f} with {perturbation_threshold:.3f} chance on vehicle {perturbed_vehicle} for {perturbed_time_left:.2f}s')
         
         perturbed_history[i] = perturbed_vehicle
 
@@ -188,7 +193,7 @@ def create_animation(positions_history, params, filename='traffic_flow.gif', fra
         blit=False, 
         interval=20
     )
-    ani.save(filename, writer='pillow', fps=30)
+    ani.save(filename, writer='ffmpeg', fps=30)
     plt.close(fig)
     print(f"Animation saved as {filename}")
 
@@ -200,19 +205,31 @@ def create_animation(positions_history, params, filename='traffic_flow.gif', fra
 
 
 if __name__ == "__main__":
-    num_vehicles = 22
+    # load config parameters
+    config_path = "config.toml"
+    if not os.path.exists(config_path):
+        print("nope")
+        sys.exit()
+    with open(config_path, "rb") as f:
+        config = tomllib.load(f)
+    num_vehicles = config['simulation']['num_vehicles']
+    dt = config['simulation']['dt']
+    T = config['simulation']['T']
+    params = config['params']
 
-    params = {
-            'alpha': 0.5,
-            'beta': 20.0,
-            'vmax_desired': 12.0, # 40 / 3600 * 1000,
-            'circum': 230.0,
-            'vehicle_length': 4.0,
-            'perturbed_time': 2.0,
-        }
+    # num_vehicles = 22
 
-    dt = 0.01
-    T = 100.0
+    # params = {
+    #         'alpha': 0.5,
+    #         'beta': 20.0,
+    #         'vmax_desired': 12.0, # 40 / 3600 * 1000,
+    #         'circum': 230.0,
+    #         'vehicle_length': 4.0,
+    #         'perturbed_time': 2.0,
+    #     }
+
+    # dt = 0.01
+    # T = 500.0
     
     init_positions = np.zeros(num_vehicles)
     init_velocities = np.zeros(num_vehicles)
@@ -256,6 +273,7 @@ if __name__ == "__main__":
 
     # simulation
     positions_history, velocities_history, perturbed_history = rk4(init_positions, init_velocities, params, dt, T)
+    vel_std_history = np.std(velocities_history, axis=1)
     time = np.linspace(0, T, len(positions_history))
 
 
@@ -290,9 +308,9 @@ if __name__ == "__main__":
 
     # Plot relative position vs time
     plt.figure(figsize=(10, 7))
-    for i in range(1, num_vehicles):
+    for i in range(num_vehicles):
         relative_position = (positions_history[:, i - 1] - positions_history[:, i]) % params['circum']
-        plt.plot(time, relative_position, label=f'v{i-1} - v{i}')
+        plt.plot(time, relative_position, label=f'v{(i-1) % num_vehicles} - v{i}')
     plt.title('Relative Positions vs Time')
     plt.xlabel('Time')
     plt.ylabel('Relative Position')
@@ -303,9 +321,9 @@ if __name__ == "__main__":
 
     # Plot relative velocity vs time
     plt.figure(figsize=(10, 7))
-    for i in range(1, num_vehicles):
+    for i in range(num_vehicles):
         relative_velocity = (velocities_history[:, i - 1] - velocities_history[:, i])
-        plt.plot(time, relative_velocity, label=f'v{i-1} - v{i}')
+        plt.plot(time, relative_velocity, label=f'v{(i-1) % num_vehicles} - v{i}')
     plt.title('Relative Velocities vs Time')
     plt.xlabel('Time')
     plt.ylabel('Relative Velocity')
@@ -314,5 +332,29 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.savefig('vel_rel.png')
 
+    # Statistics
+    steps_per_second = int(1.0 / dt)
+    time_seconds = time[::steps_per_second]
+    std_vel_seconds = vel_std_history[::steps_per_second]
+    csv_filename = 'statistics.csv'
+    table_data = np.column_stack((time_seconds, std_vel_seconds))
+    np.savetxt(
+        csv_filename, 
+        table_data, 
+        delimiter=',', 
+        header='Time (s),Std Dev Velocity (m/s)', 
+        comments='',
+        fmt='%.1f'
+    )
+    plt.figure(figsize=(10, 7))
+    plt.plot(time, vel_std_history, label="Velocity Statistics")
+    plt.title('Std vel vs time')
+    plt.xlabel('Time s')
+    plt.ylabel('Std')
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig('statistics.png')
+
     # Create animation
-    create_animation(positions_history, params, filename='traffic_flow.gif')
+    create_animation(positions_history, params, filename='traffic_flow.mp4')
