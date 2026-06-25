@@ -46,7 +46,7 @@ def rk4(init_positions, init_velocities, params, dt, T):
 
     perturbed_vehicle = None
     perturbed_time_left = 0.0
-    perturbation_threshold = 0.005
+    perturbation_threshold = 0.005 if params.get('enable_perturbation', True) else 0.0
     has_perturbed = False
     cooldown_time_left = 0.0
 
@@ -129,7 +129,7 @@ def run_simulation(alpha, beta, params):
     stability_metric = np.std(velocities_history[-1, :])
     return stability_metric
 
-def create_animation(positions_history, params, filename='traffic_flow.gif', frame_step=5):
+def create_animation(positions_history, perturbed_history, time, params, filename='traffic_flow.gif', frame_step=5):
     num_vehicles = positions_history.shape[1]
     L = params['circum']
     R = L / (2 * np.pi)
@@ -357,4 +357,4 @@ if __name__ == "__main__":
     plt.savefig('statistics.png')
 
     # Create animation
-    create_animation(positions_history, params, filename='traffic_flow.mp4')
+    create_animation(positions_history, perturbed_history, time, params, filename='traffic_flow.mp4')
