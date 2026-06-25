@@ -6,6 +6,8 @@ import matplotlib.animation as animation
 import sys
 import os
 import tomllib
+from datetime import datetime
+import shutil
 
 def dynamics(positions, velocities, params, time, perturbed_vehicle):
     alpha = params['alpha']
@@ -217,6 +219,12 @@ if __name__ == "__main__":
     T = config['simulation']['T']
     params = config['params']
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    trial_time = f"{timestamp}"
+    trial_dir = os.path.join("results", trial_time)
+    os.makedirs(trial_dir, exist_ok=True)
+    print(f"Saved output to {trial_dir}/")
+
     # num_vehicles = 22
 
     # params = {
@@ -277,6 +285,9 @@ if __name__ == "__main__":
     time = np.linspace(0, T, len(positions_history))
 
 
+    # Save config file to output folder
+    shutil.copy(config_path, os.path.join(trial_dir, 'config_used.toml'))
+
     # Plot positions
     plt.figure(figsize=(10, 7))
     for i in range(num_vehicles):
@@ -292,7 +303,7 @@ if __name__ == "__main__":
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.savefig('pos.png')
+    plt.savefig(os.path.join(trial_dir, 'pos.png'))
 
     # Plot velocities
     plt.figure(figsize=(10, 7))
@@ -304,7 +315,7 @@ if __name__ == "__main__":
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.savefig('vel.png')
+    plt.savefig(os.path.join(trial_dir, 'vel.png'))
 
     # Plot relative position vs time
     plt.figure(figsize=(10, 7))
@@ -317,7 +328,7 @@ if __name__ == "__main__":
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.savefig('pos_rel.png')
+    plt.savefig(os.path.join(trial_dir, 'pos_rel.png'))
 
     # Plot relative velocity vs time
     plt.figure(figsize=(10, 7))
@@ -330,13 +341,13 @@ if __name__ == "__main__":
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.savefig('vel_rel.png')
+    plt.savefig(os.path.join(trial_dir, 'vel_rel.png'))
 
     # Statistics
     steps_per_second = int(1.0 / dt)
     time_seconds = time[::steps_per_second]
     std_vel_seconds = vel_std_history[::steps_per_second]
-    csv_filename = 'statistics.csv'
+    csv_filename = os.path.join(trial_dir, 'statistics.csv')
     table_data = np.column_stack((time_seconds, std_vel_seconds))
     np.savetxt(
         csv_filename, 
@@ -354,7 +365,8 @@ if __name__ == "__main__":
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.savefig('statistics.png')
+    plt.savefig(os.path.join(trial_dir, 'statistics.png'))
 
     # Create animation
-    create_animation(positions_history, perturbed_history, time, params, filename='traffic_flow.mp4')
+    video_filename = os.path.join(trial_dir, 'traffic_flow.mp4')
+    create_animation(positions_history, perturbed_history, time, params, filename=video_filename)
